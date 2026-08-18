@@ -5187,6 +5187,8 @@ body.dock-on .player {
 const SHARE = "nm-1cuz";
 function hasAccess() {
   try {
+    const host = location.hostname;
+    if (host === "127.0.0.1" || host === "localhost") return true;
     if (new URLSearchParams(location.search).get("a") === SHARE) {
       sessionStorage.setItem("juz1-a", "1");
       return true;
