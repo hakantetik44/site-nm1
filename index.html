@@ -395,9 +395,10 @@ body:before {
 .pause { opacity: .45; padding: 0 .15em; }
 .w.done { color: #1e6b4e; }
 .w.on {
-  background: linear-gradient(180deg, #f4de9a, #d4a84b);
+  background: #e8b84a;
   color: #10281e;
-  box-shadow: 0 0 0 3px rgba(212,168,75,.38);
+  box-shadow: 0 0 0 4px rgba(232,184,74,.55);
+  outline: 2px solid #c9922a;
 }
 .ar.live {
   background: linear-gradient(180deg, rgba(244,222,154,.42), rgba(212,168,75,.14));
@@ -5630,7 +5631,6 @@ let dockKey = "";
 
 const SPEEDS = [0.75, 1, 1.25, 1.5];
 let chapter = 0;
-let loadedKey = "";
 let currentKey = keys[0];
 let follow = true;
 let repeatAyah = false;
@@ -5651,7 +5651,6 @@ let marks = {};
 try { marks = JSON.parse(localStorage.getItem("juz1-marks") || "{}") || {}; } catch (_) { marks = {}; }
 let view = "all";
 const frWarm = {};
-const arWarm = {};
 
 const saved = JSON.parse(localStorage.getItem("juz1-player") || "{}");
 if (saved.key && byKey[saved.key]) currentKey = saved.key;
@@ -5776,16 +5775,6 @@ function prefetchFr(key) {
   a.preload = "auto";
   a.src = frUrl(nxt);
 }
-function prefetchAr(key) {
-  if (reciter === "faqih") return;
-  const i = keys.indexOf(key);
-  const nxt = keys[i + 1];
-  if (!nxt || arWarm[nxt]) return;
-  arWarm[nxt] = true;
-  const a = new Audio();
-  a.preload = "auto";
-  a.src = ayahUrl(nxt);
-}
 function setMedia(title, artist) {
   if (!("mediaSession" in navigator)) return;
   try {
@@ -5848,15 +5837,8 @@ function reciterUrl(ch) {
   if (reciter === "faqih" && DATA.faqih) return DATA.faqih[String(ch)];
   return DATA.audio[String(ch)];
 }
-function ayahUrl(key) {
-  const g = byKey[key] && byKey[key].dataset.g;
-  return "https://cdn.islamic.network/quran/audio/128/ar.alafasy/" + g + ".mp3";
-}
-function verseRaw(key) {
-  return DATA.verses[key] || null;
-}
 function verse(key) {
-  const raw = verseRaw(key);
+  const raw = DATA.verses[key];
   if (!raw) return null;
   if (reciter !== "faqih") return raw;
   const ch = String(surahOf(key));
@@ -5870,14 +5852,6 @@ function verse(key) {
     seg: (raw.seg || []).map(s => [s[0], s[1] * k, s[2] * k])
   };
 }
-function wordSegs(key) {
-  const t = verseRaw(key);
-  if (!t) return [];
-  const span = Math.max(1, t.to - t.from);
-  const dur = (audio.duration && isFinite(audio.duration) ? audio.duration * 1000 : span);
-  const k = dur / span;
-  return (t.seg || []).map(s => [s[0], (s[1] - t.from) * k, (s[2] - t.from) * k]);
-}
 function nextStart(key) {
   const t = verse(key);
   if (!t) return 0;
@@ -5888,6 +5862,17 @@ function nextStart(key) {
     if (n) return n.from;
   }
   return t.to;
+}
+function findKey(ch, ms) {
+  let found = null;
+  for (const key of keys) {
+    if (surahOf(key) !== ch) continue;
+    const t = verse(key);
+    if (!t) continue;
+    if (ms >= t.from && ms < nextStart(key)) return key;
+    if (ms >= t.from) found = key;
+  }
+  return found;
 }
 function surahOf(key) { return Number(key.split(":")[0]); }
 function fmt(ms) {
@@ -5972,6 +5957,7 @@ function speakFr(key) {
   if (!el) return;
   const gen = ++frGen;
   pauseAr();
+  frSpeaking = true;
   document.querySelectorAll(".w.on, .w.done").forEach(w => w.classList.remove("on", "done"));
   document.querySelectorAll(".ar.live").forEach(n => n.classList.remove("live"));
   awaitingFr = false;
@@ -6067,37 +6053,31 @@ function paintAyah(key, word, labelWord) {
 }
 
 function highlight(key, ms) {
-  const segs = wordSegs(key);
+  const t = verse(key);
+  if (!t) return;
   let word = 0;
-  for (const seg of segs) {
-    if (ms >= seg[1]) word = seg[0];
-    if (ms >= seg[1] && ms < seg[2]) { word = seg[0]; break; }
+  if (reciter !== "faqih") {
+    for (const seg of t.seg) {
+      if (ms >= seg[1]) word = seg[0];
+      else break;
+    }
+    if (!word && t.seg.length && ms >= t.from) word = t.seg[0][0];
   }
-  if (segs.length && ms >= segs[segs.length - 1][2]) word = segs[segs.length - 1][0];
-  if (!word && segs.length && ms >= 0) word = segs[0][0];
   paintAyah(key, word);
 }
 
 function setSeek() {
-  const dur = audio.duration && isFinite(audio.duration) ? audio.duration * 1000 : 0;
-  if (reciter === "faqih") {
-    const t = verse(currentKey);
-    if (!t) return;
-    const end = nextStart(currentKey);
-    const ms = audio.currentTime * 1000;
-    const p = (ms - t.from) / Math.max(1, end - t.from);
-    seek.value = Math.round(Math.min(1, Math.max(0, p)) * 1000);
-    timesEl.textContent = fmt(ms - t.from) + " / " + fmt(end - t.from);
-    return;
-  }
+  const t = verse(currentKey);
+  if (!t) return;
+  const end = nextStart(currentKey);
   const ms = audio.currentTime * 1000;
-  if (!dur) return;
-  seek.value = Math.round(Math.min(1, Math.max(0, ms / dur)) * 1000);
-  timesEl.textContent = fmt(ms) + " / " + fmt(dur);
+  const p = (ms - t.from) / Math.max(1, end - t.from);
+  seek.value = Math.round(Math.min(1, Math.max(0, p)) * 1000);
+  timesEl.textContent = fmt(Math.max(0, ms - t.from)) + " / " + fmt(end - t.from);
 }
 
 function ayahFinished() {
-  if (awaitingFr || isFrPlaying()) return;
+  if (awaitingFr || frSpeaking || isFrPlaying()) return;
   if (listenMode === "both") {
     awaitingFr = true;
     audio.pause();
@@ -6106,7 +6086,8 @@ function ayahFinished() {
     return;
   }
   if (repeatAyah && listenMode === "ar") {
-    playKey(currentKey);
+    const t = verse(currentKey);
+    if (t) audio.currentTime = t.from / 1000;
     return;
   }
   const i = keys.indexOf(currentKey);
@@ -6115,18 +6096,31 @@ function ayahFinished() {
 }
 
 function sync() {
-  if (seeking || !audio.src || isFrPlaying()) return;
+  if (seeking || !chapter || isFrPlaying() || frSpeaking || awaitingFr) return;
   const ms = audio.currentTime * 1000;
-  if (reciter === "faqih") {
-    const t = verse(currentKey);
-    if (t && ms >= nextStart(currentKey)) {
-      ayahFinished();
+  const t = verse(currentKey);
+  if (listenMode === "both" && t && ms >= nextStart(currentKey)) {
+    ayahFinished();
+    return;
+  }
+  if (repeatAyah && listenMode === "ar" && t && ms >= nextStart(currentKey)) {
+    audio.currentTime = t.from / 1000;
+    return;
+  }
+  const endKey = chapter === 1 ? "1:7" : "2:141";
+  if (currentKey === endKey && t && ms >= nextStart(endKey)) {
+    if (chapter === 1 && listenMode === "ar") {
+      playKey("2:1");
       return;
     }
-    paintAyah(currentKey, 0);
-    setSeek();
-    markArButtons();
+    stop(false);
     return;
+  }
+  const key = findKey(chapter, ms) || currentKey;
+  if (key !== currentKey) {
+    currentKey = key;
+    save();
+    if (document.body.classList.contains("dock-on")) openDock(key);
   }
   highlight(currentKey, ms);
   setSeek();
@@ -6176,23 +6170,10 @@ async function ensureChapter(ch) {
   const same = loadedReciter === reciter && chapter === ch && audio.src && !audio.error && audio.readyState >= 2;
   if (same) return;
   chapter = ch;
-  loadedKey = "";
   loadedReciter = reciter;
   audio.src = url;
   audio.playbackRate = SPEEDS[speedIdx];
   await waitAudio(reciter === "faqih" && ch === 2 ? 90000 : 25000);
-}
-
-async function ensureAyah(key) {
-  const url = ayahUrl(key);
-  const same = loadedReciter === reciter && loadedKey === key && audio.src && !audio.error && audio.readyState >= 2;
-  if (same) return;
-  loadedKey = key;
-  loadedReciter = reciter;
-  chapter = surahOf(key);
-  audio.src = url;
-  audio.playbackRate = SPEEDS[speedIdx];
-  await waitAudio(20000);
 }
 
 async function playKey(key, wordI) {
@@ -6203,35 +6184,25 @@ async function playKey(key, wordI) {
   player.hidden = false;
   playerRef.textContent = "Yükleniyor…";
   try {
-    if (reciter === "faqih") {
-      await ensureChapter(surahOf(key));
-      if (gen !== playGen) return;
-      const t = verse(key);
-      if (!t) return;
-      let start = t.from;
-      if (wordI) {
-        const hit = t.seg.find(s => s[0] === wordI);
-        if (hit) start = hit[1];
-      }
-      audio.currentTime = start / 1000;
-    } else {
-      await ensureAyah(key);
-      if (gen !== playGen) return;
-      let start = 0;
-      if (wordI) {
-        const hit = wordSegs(key).find(s => s[0] === wordI);
-        if (hit) start = hit[1] / 1000;
-      }
-      audio.currentTime = start;
+    await ensureChapter(surahOf(key));
+    if (gen !== playGen) return;
+    const t = verse(key);
+    if (!t) return;
+    let start = t.from;
+    if (wordI) {
+      const hit = t.seg.find(s => s[0] === wordI);
+      if (hit) start = hit[1];
     }
     audio.playbackRate = SPEEDS[speedIdx];
+    audio.currentTime = start / 1000;
     await audio.play();
     if (gen !== playGen) { audio.pause(); return; }
     playPauseBtn.textContent = "❚❚";
     markArButtons();
     setMedia(key + " · " + reciterShort(), reciterName());
     prefetchFr(key);
-    prefetchAr(key);
+    highlight(key, start);
+    setSeek();
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(loop);
     save();
@@ -6260,7 +6231,7 @@ function toggle() {
     speakFr(currentKey);
     return;
   }
-  if (audio.src && audio.paused && (reciter === "faqih" ? chapter === surahOf(currentKey) : loadedKey === currentKey)) {
+  if (audio.src && audio.paused && chapter === surahOf(currentKey)) {
     audio.play().then(() => {
       playPauseBtn.textContent = "❚❚";
       player.hidden = false;
@@ -6514,7 +6485,6 @@ reciterBtn.onclick = () => {
   paintReciter();
   save();
   chapter = 0;
-  loadedKey = "";
   loadedReciter = "";
   if (playing) playKey(currentKey);
   else {
@@ -6546,17 +6516,11 @@ speedBtn.onclick = () => {
 
 seek.addEventListener("input", () => {
   seeking = true;
-  if (reciter === "faqih") {
-    const t = verse(currentKey);
-    if (!t) return;
-    const end = nextStart(currentKey);
-    const ms = t.from + (Number(seek.value) / 1000) * (end - t.from);
-    timesEl.textContent = fmt(ms - t.from) + " / " + fmt(end - t.from);
-    return;
-  }
-  const dur = audio.duration && isFinite(audio.duration) ? audio.duration * 1000 : 0;
-  const ms = (Number(seek.value) / 1000) * dur;
-  timesEl.textContent = fmt(ms) + " / " + fmt(dur);
+  const t = verse(currentKey);
+  if (!t) return;
+  const end = nextStart(currentKey);
+  const ms = t.from + (Number(seek.value) / 1000) * (end - t.from);
+  timesEl.textContent = fmt(ms - t.from) + " / " + fmt(end - t.from);
 });
 seek.addEventListener("change", () => {
   seeking = false;
@@ -6564,17 +6528,21 @@ seek.addEventListener("change", () => {
     frAudio.currentTime = (Number(seek.value) / 1000) * frAudio.duration;
     return;
   }
-  if (reciter === "faqih") {
-    const t = verse(currentKey);
-    if (!t) return;
-    const end = nextStart(currentKey);
-    audio.currentTime = (t.from + (Number(seek.value) / 1000) * (end - t.from)) / 1000;
-    return;
-  }
-  if (audio.duration) audio.currentTime = (Number(seek.value) / 1000) * audio.duration;
+  const t = verse(currentKey);
+  if (!t) return;
+  const end = nextStart(currentKey);
+  audio.currentTime = (t.from + (Number(seek.value) / 1000) * (end - t.from)) / 1000;
+  highlight(currentKey, audio.currentTime * 1000);
 });
 
-audio.addEventListener("ended", () => ayahFinished());
+audio.addEventListener("timeupdate", () => {
+  if (!seeking && !audio.paused) sync();
+});
+audio.addEventListener("ended", () => {
+  if (listenMode === "both") { speakFr(currentKey); return; }
+  if (chapter === 1 && listenMode === "ar") playKey("2:1");
+  else stop();
+});
 frAudio.addEventListener("ended", () => afterFr(currentKey));
 frAudio.addEventListener("timeupdate", () => {
   if (!frAudio.duration || seeking) return;
