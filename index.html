@@ -5638,6 +5638,7 @@ const faqihDur = {};
 let loadedReciter = "";
 let frSpeaking = false;
 let awaitingFr = false;
+let chainPlay = false;
 let playGen = 0;
 let frGen = 0;
 let scale = 1;
@@ -5846,13 +5847,26 @@ function verse(key) {
     seg: (raw.seg || []).map(s => [s[0], s[1] * k, s[2] * k])
   };
 }
+function ayahStop(key) {
+  const t = verse(key);
+  if (!t) return 0;
+  const last = t.seg && t.seg.length ? t.seg[t.seg.length - 1][2] : t.to;
+  const i = keys.indexOf(key);
+  const nk = keys[i + 1];
+  let nextFrom = t.to;
+  if (nk && surahOf(nk) === surahOf(key)) {
+    const n = verse(nk);
+    if (n) nextFrom = n.from;
+  }
+  return Math.min(last + 40, nextFrom - 120);
+}
 function findKey(ch, ms) {
   let found = null;
   for (const key of keys) {
     if (surahOf(key) !== ch) continue;
     const t = verse(key);
     if (!t) continue;
-    if (ms >= t.from && ms < t.to) return key;
+    if (ms >= t.from && ms < ayahStop(key)) return key;
     if (ms >= t.from) found = key;
   }
   return found;
@@ -5931,7 +5945,7 @@ function afterFr(key) {
     if (i < keys.length - 1) speakFr(keys[i + 1]);
   } else if (listenMode === "both") {
     const i = keys.indexOf(key);
-    if (i < keys.length - 1) playKey(keys[i + 1]);
+    if (i < keys.length - 1) playKey(keys[i + 1], null, true);
   }
 }
 
@@ -6038,42 +6052,54 @@ function highlight(key, ms) {
 function setSeek(key, ms) {
   const t = verse(key);
   if (!t) return;
-  const p = (ms - t.from) / Math.max(1, t.to - t.from);
+  const end = ayahStop(key);
+  const p = (ms - t.from) / Math.max(1, end - t.from);
   seek.value = Math.round(Math.min(1, Math.max(0, p)) * 1000);
-  timesEl.textContent = fmt(ms - t.from) + " / " + fmt(t.to - t.from);
+  timesEl.textContent = fmt(ms - t.from) + " / " + fmt(end - t.from);
+}
+
+function finishAyah() {
+  if (audio.paused) return;
+  const t = verse(currentKey);
+  const stopAt = ayahStop(currentKey);
+  audio.pause();
+  cancelAnimationFrame(raf);
+  if (t) {
+    try { audio.currentTime = Math.max(t.from, stopAt) / 1000; } catch (_) {}
+  }
+  highlight(currentKey, stopAt);
+  markArButtons();
+  if (listenMode === "both" && !awaitingFr) {
+    awaitingFr = true;
+    playPauseBtn.textContent = "▶";
+    speakFr(currentKey);
+    return;
+  }
+  if (repeatAyah && listenMode === "ar" && t) {
+    audio.currentTime = t.from / 1000;
+    audio.play().then(() => {
+      playPauseBtn.textContent = "❚❚";
+      raf = requestAnimationFrame(loop);
+    }).catch(() => {});
+    return;
+  }
+  if (listenMode === "ar" && chainPlay) {
+    const i = keys.indexOf(currentKey);
+    if (i < keys.length - 1) {
+      playKey(keys[i + 1], null, true);
+      return;
+    }
+  }
+  playPauseBtn.textContent = "▶";
 }
 
 function sync() {
   if (seeking || !chapter || isFrPlaying()) return;
   const ms = audio.currentTime * 1000;
-  const endKey = chapter === 1 ? "1:7" : "2:141";
-  const end = verse(endKey);
   const t = verse(currentKey);
-  if (listenMode === "both" && t && ms >= t.to && !awaitingFr) {
-    awaitingFr = true;
-    audio.pause();
-    playPauseBtn.textContent = "▶";
-    cancelAnimationFrame(raf);
-    speakFr(currentKey);
+  if (t && ms >= ayahStop(currentKey)) {
+    finishAyah();
     return;
-  }
-  if (repeatAyah && listenMode === "ar" && t && ms >= t.to) {
-    audio.currentTime = t.from / 1000;
-    return;
-  }
-  if (end && ms >= end.to) {
-    if (chapter === 1 && listenMode === "ar") {
-      playKey("2:1");
-      return;
-    }
-    stop(false);
-    return;
-  }
-  const key = findKey(chapter, ms) || currentKey;
-  if (key !== currentKey) {
-    currentKey = key;
-    save();
-    if (document.body.classList.contains("dock-on")) openDock(key);
   }
   highlight(currentKey, ms);
   setSeek(currentKey, ms);
@@ -6129,7 +6155,8 @@ async function ensureChapter(ch) {
   await waitAudio(reciter === "faqih" && ch === 2 ? 90000 : 25000);
 }
 
-async function playKey(key, wordI) {
+async function playKey(key, wordI, chain) {
+  chainPlay = chain === true;
   const gen = ++playGen;
   stopFr();
   currentKey = key;
@@ -6329,7 +6356,7 @@ document.getElementById("prevAyah").onclick = () => neighbor(-1);
 document.getElementById("nextAyah").onclick = () => neighbor(1);
 document.getElementById("playJuz").onclick = () => {
   if (listenMode === "fr") speakFr("1:1");
-  else playKey("1:1");
+  else playKey("1:1", null, true);
 };
 document.getElementById("studyNow").onclick = jumpStudy;
 document.getElementById("sessGo").onclick = jumpStudy;
@@ -6471,8 +6498,9 @@ seek.addEventListener("input", () => {
   seeking = true;
   const t = verse(currentKey);
   if (!t) return;
-  const ms = t.from + (Number(seek.value) / 1000) * (t.to - t.from);
-  timesEl.textContent = fmt(ms - t.from) + " / " + fmt(t.to - t.from);
+  const end = ayahStop(currentKey);
+  const ms = t.from + (Number(seek.value) / 1000) * (end - t.from);
+  timesEl.textContent = fmt(ms - t.from) + " / " + fmt(end - t.from);
 });
 seek.addEventListener("change", () => {
   seeking = false;
@@ -6482,16 +6510,13 @@ seek.addEventListener("change", () => {
   }
   const t = verse(currentKey);
   if (!t) return;
-  const ms = t.from + (Number(seek.value) / 1000) * (t.to - t.from);
+  const end = ayahStop(currentKey);
+  const ms = t.from + (Number(seek.value) / 1000) * (end - t.from);
   audio.currentTime = ms / 1000;
   highlight(currentKey, ms);
 });
 
-audio.addEventListener("ended", () => {
-  if (listenMode === "both") { speakFr(currentKey); return; }
-  if (chapter === 1 && listenMode === "ar") playKey("2:1");
-  else stop();
-});
+audio.addEventListener("ended", () => finishAyah());
 frAudio.addEventListener("ended", () => afterFr(currentKey));
 frAudio.addEventListener("timeupdate", () => {
   if (!frAudio.duration || seeking) return;
