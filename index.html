@@ -5284,27 +5284,55 @@ function pauseEverything() {
 
 function kickPlay(gen) {
   audio.playbackRate = SPEEDS[speedIdx];
-  const p = audio.play();
-  if (!p || !p.then) return;
+  const start = () => {
+    const p = audio.play();
+    if (!p || !p.then) return;
     p.then(() => {
       if (gen !== playGen) return;
       playPauseBtn.textContent = "❚❚";
-    markArButtons();
-    markFrButtons();
-    cancelAnimationFrame(raf);
-    if (phase === "ar" && !audio.paused) raf = requestAnimationFrame(loop);
-  }).catch((err) => {
-    if (gen !== playGen || !keepPlaying) return;
-    if (err && err.name === "AbortError") return;
-    const nxt = chainNext(currentKey);
-    if (nxt && !repeatAyah) {
-      if (listenMode === "fr") speakFr(nxt);
-      else playKey(nxt);
-      return;
-    }
+      markArButtons();
+      markFrButtons();
+      cancelAnimationFrame(raf);
+      if (phase === "ar" && !audio.paused) raf = requestAnimationFrame(loop);
+    }).catch((err) => {
+      if (gen !== playGen || !keepPlaying) return;
+      if (err && err.name === "AbortError") {
+        if (!audio.paused && !audio.ended) return;
+        const again = audio.play();
+        if (again && again.then) {
+          again.then(() => {
+            if (gen !== playGen) return;
+            playPauseBtn.textContent = "❚❚";
+            if (phase === "ar" && !audio.paused) {
+              cancelAnimationFrame(raf);
+              raf = requestAnimationFrame(loop);
+            }
+          }).catch(() => {
+            if (gen !== playGen || !keepPlaying) return;
+            skipOrStop();
+          });
+        }
+        return;
+      }
+      skipOrStop();
+    });
+  };
+  start();
+}
+
+function skipOrStop() {
+  if (!keepPlaying) {
     pauseEverything();
-    playerRef.textContent = "Ses açılamadı  ·  " + currentKey;
-  });
+    return;
+  }
+  const nxt = chainNext(currentKey);
+  if (nxt && !repeatAyah) {
+    if (listenMode === "fr") speakFr(nxt);
+    else playKey(nxt);
+    return;
+  }
+  pauseEverything();
+  playerRef.textContent = "Ses açılamadı  ·  " + currentKey;
 }
 
 function continueAfter() {
@@ -5344,7 +5372,11 @@ function continueAfter() {
 function onEnded() {
   if (advancing) return;
   advancing = true;
-  continueAfter();
+  try {
+    continueAfter();
+  } catch (_) {
+    skipOrStop();
+  }
   advancing = false;
 }
 
@@ -5355,6 +5387,16 @@ function speakFr(key) {
   const gen = ++playGen;
   currentKey = key;
   phase = "fr";
+  const url = frUrl(key);
+  if (loadedKind !== "fr" || loadedKey !== key) {
+    audio.src = url;
+    loadedKey = key;
+    loadedKind = "fr";
+    loadedReciter = reciter;
+  } else {
+    try { audio.currentTime = 0; } catch (_) {}
+  }
+  kickPlay(gen);
   player.hidden = false;
   document.querySelectorAll(".w.on, .w.done").forEach(w => w.classList.remove("on", "done"));
   el.classList.add("fr-active", "active");
@@ -5370,18 +5412,8 @@ function speakFr(key) {
   paintPageNav(el.dataset.p);
   paintSession();
   followRead(el.querySelector(".ar") || el);
-  syncDock(key);
-  if (loadedKind !== "fr" || loadedKey !== key) {
-    audio.src = url;
-    loadedKey = key;
-    loadedKind = "fr";
-    loadedReciter = reciter;
-  } else {
-    try { audio.currentTime = 0; } catch (_) {}
-  }
-  if (gen !== playGen) return;
-  kickPlay(gen);
   persistPlayer();
+  syncDock(key);
 }
 
 function clearMarks() {
@@ -5542,13 +5574,6 @@ function playKey(key, wordI) {
   player.hidden = false;
   clearFrUi();
   playPauseBtn.textContent = "❚❚";
-  paintPageNav(el.dataset.p);
-  paintSession();
-  setMedia(key + " · " + reciterShort(), reciterName());
-  prefetchFr(key);
-  prefetchAr(key);
-  persistPlayer();
-  syncDock(key);
   if (reciter === "faqih") {
     const url = reciterUrl(surahOf(key));
     const t = verse(key);
@@ -5574,36 +5599,41 @@ function playKey(key, wordI) {
     };
     if (audio.readyState >= 1) apply();
     else audio.addEventListener("loadedmetadata", apply, { once: true });
-    if (gen !== playGen) return;
     kickPlay(gen);
-    return;
-  }
-  const url = ayahUrl(key);
-  const raw = DATA.verses[key];
-  let start = 0;
-  if (wordI && raw) {
-    const hit = raw.seg.find(s => s[0] === wordI);
-    if (hit) start = Math.max(0, (hit[1] - raw.from) / 1000);
-  }
-  if (loadedKind !== "ar" || loadedKey !== key || loadedReciter !== reciter) {
-    audio.src = url;
-    loadedKey = key;
-    loadedKind = "ar";
-    loadedReciter = reciter;
-    chapter = surahOf(key);
   } else {
-    try { audio.currentTime = start; } catch (_) {}
-  }
-  highlight(key, start * 1000);
-  setSeek(key, start * 1000);
-  if (start && audio.readyState < 1) {
-    audio.addEventListener("loadedmetadata", () => {
-      if (gen !== playGen) return;
+    const url = ayahUrl(key);
+    const raw = DATA.verses[key];
+    let start = 0;
+    if (wordI && raw) {
+      const hit = raw.seg.find(s => s[0] === wordI);
+      if (hit) start = Math.max(0, (hit[1] - raw.from) / 1000);
+    }
+    if (loadedKind !== "ar" || loadedKey !== key || loadedReciter !== reciter) {
+      audio.src = url;
+      loadedKey = key;
+      loadedKind = "ar";
+      loadedReciter = reciter;
+      chapter = surahOf(key);
+    } else {
       try { audio.currentTime = start; } catch (_) {}
-    }, { once: true });
+    }
+    highlight(key, start * 1000);
+    setSeek(key, start * 1000);
+    if (start && audio.readyState < 1) {
+      audio.addEventListener("loadedmetadata", () => {
+        if (gen !== playGen) return;
+        try { audio.currentTime = start; } catch (_) {}
+      }, { once: true });
+    }
+    kickPlay(gen);
   }
-  if (gen !== playGen) return;
-  kickPlay(gen);
+  paintPageNav(el.dataset.p);
+  paintSession();
+  setMedia(key + " · " + reciterShort(), reciterName());
+  prefetchFr(key);
+  prefetchAr(key);
+  persistPlayer();
+  syncDock(key);
 }
 
 function pause() {
@@ -6064,6 +6094,10 @@ audio.addEventListener("timeupdate", () => {
   if (!audio.paused) sync();
 });
 audio.addEventListener("ended", onEnded);
+audio.addEventListener("error", () => {
+  if (!keepPlaying || advancing) return;
+  onEnded();
+});
 
 document.getElementById("bigger").onclick = () => {
   scale = Math.min(1.25, scale + 0.06);
