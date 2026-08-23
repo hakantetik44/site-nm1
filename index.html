@@ -7043,8 +7043,8 @@ const faqihDur = {};
 let loadedReciter = "";
 let frSpeaking = false;
 let awaitingFr = false;
-let chainPlay = false;
-let chainPage = 0;
+let keepPlaying = false;
+let advancing = false;
 let playGen = 0;
 let frGen = 0;
 let scale = 1;
@@ -7112,10 +7112,7 @@ function setReadView(v, persist) {
 }
 function chainNext(key) {
   const i = keys.indexOf(key);
-  const nxt = keys[i + 1];
-  if (!nxt) return "";
-  if (chainPage && Number(byKey[nxt].dataset.p) !== Number(chainPage)) return "";
-  return nxt;
+  return keys[i + 1] || "";
 }
 function paintMarks() {
   ayahEls.forEach(el => {
@@ -7387,33 +7384,41 @@ function pauseAr() {
 }
 
 function pauseEverything() {
+  keepPlaying = false;
+  advancing = false;
   pauseAr();
   stopFr();
   playPauseBtn.textContent = "▶";
 }
 
+function goOn(key) {
+  if (repeatAyah) {
+    if (listenMode === "fr") speakFr(key);
+    else playKey(key);
+    return true;
+  }
+  if (!keepPlaying) return false;
+  const nxt = chainNext(key);
+  if (!nxt) return false;
+  if (listenMode === "fr") speakFr(nxt);
+  else playKey(nxt);
+  return true;
+}
+
 function afterFr(key) {
   frSpeaking = false;
   markFrButtons();
-  playPauseBtn.textContent = "▶";
   const el = byKey[key];
   el?.querySelector(".lecture")?.classList.remove("reading");
-  if (repeatAyah && listenMode !== "ar") {
-    speakFr(key);
-    return;
-  }
-  if (listenMode === "fr") {
-    const nxt = chainNext(key);
-    if (nxt) speakFr(nxt);
-  } else if (listenMode === "both") {
-    const nxt = chainNext(key);
-    if (nxt) playKey(nxt, null, true);
-  }
+  if (goOn(key)) return;
+  keepPlaying = false;
+  playPauseBtn.textContent = "▶";
 }
 
 function speakFr(key) {
   const el = byKey[key];
   if (!el) return;
+  keepPlaying = true;
   const gen = ++frGen;
   pauseAr();
   document.querySelectorAll(".w.on, .w.done").forEach(w => w.classList.remove("on", "done"));
@@ -7528,7 +7533,8 @@ function setSeek(key, fileMs) {
 }
 
 function finishAyah() {
-  if (awaitingFr) return;
+  if (awaitingFr || advancing) return;
+  advancing = true;
   audio.pause();
   cancelAnimationFrame(raf);
   const dur = audio.duration && isFinite(audio.duration) ? audio.duration * 1000 : 0;
@@ -7536,21 +7542,13 @@ function finishAyah() {
   markArButtons();
   if (listenMode === "both") {
     awaitingFr = true;
-    playPauseBtn.textContent = "▶";
+    advancing = false;
     speakFr(currentKey);
     return;
   }
-  if (repeatAyah && listenMode === "ar") {
-    playKey(currentKey, null, chainPlay);
-    return;
-  }
-  if (listenMode === "ar" && chainPlay) {
-    const nxt = chainNext(currentKey);
-    if (nxt) {
-      playKey(nxt, null, true);
-      return;
-    }
-  }
+  if (listenMode === "ar" && goOn(currentKey)) return;
+  advancing = false;
+  keepPlaying = false;
   playPauseBtn.textContent = "▶";
 }
 
@@ -7565,6 +7563,11 @@ function sync() {
     });
     setSeek(currentKey, ms);
     markArButtons();
+    const end = ayahStop(currentKey);
+    if (end && ms >= end && !advancing) {
+      finishAyah();
+      return;
+    }
     followRead(document.body.classList.contains("view-lecture") ? (el.querySelector(".ar") || el) : el);
     return;
   }
@@ -7635,9 +7638,8 @@ async function ensureAyah(key) {
   await waitAudio(20000);
 }
 
-async function playKey(key, wordI, chain) {
-  chainPlay = chain === true;
-  if (!chainPlay) chainPage = 0;
+async function playKey(key, wordI) {
+  keepPlaying = true;
   const gen = ++playGen;
   stopFr();
   currentKey = key;
@@ -7671,6 +7673,7 @@ async function playKey(key, wordI, chain) {
       highlight(key, start * 1000);
       setSeek(key, start * 1000);
     }
+    advancing = false;
     audio.playbackRate = SPEEDS[speedIdx];
     await audio.play();
     if (gen !== playGen) { audio.pause(); return; }
@@ -7684,6 +7687,7 @@ async function playKey(key, wordI, chain) {
     save();
   } catch (_) {
     if (gen !== playGen) return;
+    advancing = false;
     playPauseBtn.textContent = "▶";
     playerRef.textContent = "Arapça ses açılamadı  ·  " + key;
   }
@@ -7703,8 +7707,13 @@ function toggle() {
     pauseEverything();
     return;
   }
+  keepPlaying = true;
   if (listenMode === "fr") {
     speakFr(currentKey);
+    return;
+  }
+  if (audio.ended || (audio.duration && audio.currentTime >= audio.duration - 0.08)) {
+    playKey(currentKey);
     return;
   }
   if (audio.src && audio.paused && (reciter === "faqih" ? chapter === surahOf(currentKey) : loadedKey === currentKey)) {
@@ -7723,6 +7732,7 @@ function toggle() {
 function neighbor(delta) {
   const i = keys.indexOf(currentKey);
   const next = keys[Math.min(keys.length - 1, Math.max(0, i + delta))];
+  keepPlaying = true;
   if (listenMode === "fr") speakFr(next);
   else playKey(next);
 }
@@ -7820,9 +7830,8 @@ document.addEventListener("click", (e) => {
   }
   const btnPage = e.target.closest(".play-page");
   if (btnPage) {
-    chainPage = Number(btnPage.dataset.page) || 0;
     if (listenMode === "fr") speakFr(btnPage.dataset.key);
-    else playKey(btnPage.dataset.key, null, true);
+    else playKey(btnPage.dataset.key);
     return;
   }
   const turn = e.target.closest(".page-turn");
@@ -7833,14 +7842,14 @@ document.addEventListener("click", (e) => {
   const btnFr = e.target.closest(".play-fr");
   if (btnFr) {
     const key = btnFr.dataset.key;
-    if (isFrPlaying()) pauseEverything();
+    if (isFrPlaying() && currentKey === key) pauseEverything();
     else speakFr(key);
     return;
   }
   const btn = e.target.closest(".play");
   if (btn) {
     const key = btn.dataset.key;
-    if (isArPlaying()) pauseEverything();
+    if (isArPlaying() && currentKey === key) pauseEverything();
     else playKey(key);
     return;
   }
@@ -7863,9 +7872,8 @@ playPauseBtn.onclick = toggle;
 document.getElementById("prevAyah").onclick = () => neighbor(-1);
 document.getElementById("nextAyah").onclick = () => neighbor(1);
 document.getElementById("playJuz").onclick = () => {
-  chainPage = 0;
   if (listenMode === "fr") speakFr("1:1");
-  else playKey("1:1", null, true);
+  else playKey("1:1");
 };
 document.getElementById("viewAyah")?.addEventListener("click", () => setReadView("ayah"));
 document.getElementById("viewLecture")?.addEventListener("click", () => setReadView("lecture"));
