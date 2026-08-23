@@ -34,7 +34,7 @@
   --shadow: 0 18px 50px rgba(0,0,0,.28);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html { scroll-behavior: smooth; }
+html { scroll-behavior: auto; }
 button, a, .fw, .w, .ayah { touch-action: manipulation; }
 .wrap { position: relative; z-index: 1; max-width: 980px; margin: 0 auto; padding: 28px 18px calc(150px + env(safe-area-inset-bottom, 0px)); }
 body {
@@ -7033,7 +7033,6 @@ let loadedKey = "";
 let currentKey = keys[0];
 let follow = true;
 let followLock = 0;
-let lastFollowAt = 0;
 let repeatAyah = false;
 let speedIdx = 1;
 let raf = 0;
@@ -7249,6 +7248,22 @@ function parseHash() {
   return byKey[key] ? key : "";
 }
 
+function followRead(node) {
+  if (!follow || !node) return;
+  if (Date.now() - followLock < 450) return;
+  const r = node.getBoundingClientRect();
+  const toc = document.querySelector(".toc");
+  const top = (toc ? toc.getBoundingClientRect().bottom : 72) + 8;
+  const bot = window.innerHeight - 168;
+  const keepUntil = top + Math.max(140, (bot - top) * 0.52);
+  if (r.top >= top && r.bottom <= keepUntil) return;
+  try {
+    node.scrollIntoView({ behavior: "instant", block: "center", inline: "nearest" });
+  } catch (_) {
+    node.scrollIntoView(true);
+  }
+}
+
 function focusAyah(key) {
   const el = byKey[key];
   if (!el) return;
@@ -7455,10 +7470,7 @@ function speakFr(key) {
     }
   }
   markFrButtons();
-  if (follow) {
-    const t = document.body.classList.contains("view-lecture") ? (el.querySelector(".ar") || el) : el;
-    t.scrollIntoView({ behavior: "auto", block: "nearest" });
-  }
+  followRead(document.body.classList.contains("view-lecture") ? (el.querySelector(".ar") || el) : el);
   save();
 }
 
@@ -7496,16 +7508,7 @@ function highlight(key, fileMs) {
   });
   const on = el.querySelector(".w.on");
   setPlayerLang("ar", (el.dataset.s === "1" ? "Al-Fâtiha" : "Al-Baqara") + " " + key + "  ·  " + reciterShort(), on ? on.textContent : "");
-  if (follow && on && Date.now() - followLock > 1800) {
-    const r = on.getBoundingClientRect();
-    const top = 96, bottom = window.innerHeight - 170;
-    if (r.bottom < top || r.top > bottom) {
-      if (Date.now() - lastFollowAt > 400) {
-        lastFollowAt = Date.now();
-        on.scrollIntoView({ behavior: "auto", block: "nearest" });
-      }
-    }
-  }
+  followRead(on || (document.body.classList.contains("view-lecture") ? el.querySelector(".ar") : el));
 }
 
 function setSeek(key, fileMs) {
@@ -7562,6 +7565,7 @@ function sync() {
     });
     setSeek(currentKey, ms);
     markArButtons();
+    followRead(document.body.classList.contains("view-lecture") ? (el.querySelector(".ar") || el) : el);
     return;
   }
   highlight(currentKey, ms);
@@ -7987,7 +7991,7 @@ document.getElementById("pageNav")?.addEventListener("click", (e) => {
   if (!b) return;
   goPage(b.dataset.page);
 });
-["wheel", "touchmove", "pointerdown"].forEach(ev => {
+["wheel", "touchmove"].forEach(ev => {
   window.addEventListener(ev, () => { followLock = Date.now(); }, { passive: true });
 });
 document.querySelector(".view-filter")?.addEventListener("click", (e) => {
